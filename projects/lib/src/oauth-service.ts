@@ -881,9 +881,10 @@ export class OAuthService extends AuthConfig {
         return race([errors, success, timeout])
             .pipe(
                 tap(e => {
-                    if (e.type === 'silent_refresh_timeout') {
+                    // enable emit all event
+                    // if (e.type === 'silent_refresh_timeout') {
                         this.eventsSubject.next(e);
-                    }
+                    // }
                 }),
                 map(e => {
                     if (e instanceof OAuthErrorEvent) {
@@ -893,6 +894,77 @@ export class OAuthService extends AuthConfig {
                 })
             )
             .toPromise();
+    }
+
+    public silentRefreshObs(params: object = {}, noPrompt = true): Observable<OAuthEvent> {
+        const claims: object = this.getIdentityClaims() || {};
+
+        if (this.useIdTokenHintForSilentRefresh && this.hasValidIdToken()) {
+            params['id_token_hint'] = this.getIdToken();
+        }
+
+        if (!this.validateUrlForHttps(this.loginUrl)) {
+            throw new Error(
+                'tokenEndpoint must use https, or config value for property requireHttps must allow http'
+            );
+        }
+
+        if (typeof document === 'undefined') {
+            throw new Error('silent refresh is not supported on this platform');
+        }
+
+        const existingIframe = document.getElementById(
+            this.silentRefreshIFrameName
+        );
+
+        if (existingIframe) {
+            document.body.removeChild(existingIframe);
+        }
+
+        this.silentRefreshSubject = claims['sub'];
+
+        const iframe = document.createElement('iframe');
+        iframe.id = this.silentRefreshIFrameName;
+
+        this.setupSilentRefreshEventListener();
+
+        const redirectUri = this.silentRefreshRedirectUri || this.redirectUri;
+        this.createLoginUrl(null, null, redirectUri, noPrompt, params).then(url => {
+            iframe.setAttribute('src', url);
+
+            if (!this.silentRefreshShowIFrame) {
+                iframe.style['display'] = 'none';
+            }
+            document.body.appendChild(iframe);
+        });
+
+        const errors = this.events.pipe(
+            filter(e => e instanceof OAuthErrorEvent),
+            first()
+        );
+        const success = this.events.pipe(
+            filter(e => e.type === 'silently_refreshed'),
+            first()
+        );
+        const timeout = of(
+            new OAuthErrorEvent('silent_refresh_timeout', null)
+        ).pipe(delay(this.silentRefreshTimeout));
+
+        return race([errors, success, timeout])
+            .pipe(
+                tap(e => {
+                    // enable emit all event
+                    // if (e.type === 'silent_refresh_timeout') {
+                    this.eventsSubject.next(e);
+                    // }
+                }),
+                map(e => {
+                    if (e instanceof OAuthErrorEvent) {
+                        throw e;
+                    }
+                    return e;
+                })
+            );
     }
 
     protected canPerformSessionCheck(): boolean {
